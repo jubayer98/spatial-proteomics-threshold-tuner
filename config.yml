@@ -1,0 +1,65 @@
+ct_marker_dict:
+  PAX5: "BCell"
+  CD3: "TCell"
+  CD31: "Vascular31"
+  CD34: "Vascular34"
+  CD11c: "Dendritic"
+  CD11b: "Myeloid"
+  CD138: "Plasma"
+  CD68: "Macro"
+  CD15: "Granulo"
+  PDN: "Lymphatic"
+  CD90: "Stroma"
+  CD56: "NK56"
+  CD57: "NK57"
+
+all_celltype_colors:
+  BCell: "#e60000"
+  TCell: "#8ee53f"
+  Vascular31: "#0C44C1"
+  Vascular34: "#F026F0"
+  Dendritic: "#FFD800"
+  Myeloid: "#FF7800"
+  Plasma: "#633EFA"
+  Macro: "#0092D6"
+  Granulo: "#195905"
+  Lymphatic: "#794E1B"
+  Stroma: "#990000"
+  NK56: "#87D3F8"
+  NK57: "#808080"
+
+all_marker_colors:
+  PAX5: "#e60000"
+  CD3: "#8ee53f"
+  CD31: "#0C44C1"
+  CD34: "#F026F0"
+  CD11c: "#FFD800"
+  CD11b: "#FF7800"
+  CD138: "#633EFA"
+  CD68: "#0092D6"
+  CD15: "#195905"
+  PDN: "#794E1B"
+  CD90: "#990000"
+  CD56: "#87D3F8"
+  CD57: "#808080"
+
+# Quantile fractions for each marker (0–1)
+# The initial threshold will be int(percentile(img, 100 * fraction))
+# Adjust these values based on your data distribution.
+marker_threshold_dict:
+  PAX5: 0.5
+  CD3: 0.4
+  CD31: 0.5
+  CD34: 0.5
+  CD11c: 0.5
+  CD11b: 0.98
+  CD138: 1.0
+  CD68: 0.5
+  CD15: 0.95
+  PDN: 0.5
+  CD90: 0.99
+  CD56: 0.5
+  CD57: 0.9
+
+# Directory where threshold .txt files will be saved
+threshold_output_dir: "./thresholds"
