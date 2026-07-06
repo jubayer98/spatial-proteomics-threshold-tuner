@@ -1,0 +1,21 @@
+name: spatial-proteomics-tuner
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9 # Or a compatible version like 3.8, 3.10
+  - numpy
+  - matplotlib
+  - scikit-image
+  - pandas
+  - shapely
+  - xarray
+  - streamlit
+  - pyyaml
+  - pip
+  - pip:
+    # Add any pip-specific packages here if needed, though most are on conda-forge
+
+# HOW TO USE IT?
+# conda env create -f environment.yml
+# conda activate spatial-proteomics-tuner
