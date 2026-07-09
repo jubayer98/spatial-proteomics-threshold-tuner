@@ -3,19 +3,48 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9 # Or a compatible version like 3.8, 3.10
+  - python>=3.12
   - numpy
-  - matplotlib
-  - scikit-image
   - pandas
-  - shapely
   - xarray
+  - zarr
+  - scikit-image
+  - matplotlib
+  - shapely
   - streamlit
   - pyyaml
   - pip
   - pip:
-    # Add any pip-specific packages here if needed, though most are on conda-forge
+      # No pip-only dependencies required at this time.
+      # If you add any, list them here.
+      # Example: opencv-python, tifffile, etc.
 
-# HOW TO USE IT?
-# conda env create -f environment.yml
-# conda activate spatial-proteomics-tuner
+# ============================================================
+# HOW TO USE THIS ENVIRONMENT FILE
+# ============================================================
+#
+# 1. Create the environment:
+#    conda env create -f environment.yml
+#
+# 2. Activate the environment:
+#    conda activate spatial-proteomics-tuner
+#
+# 3. Launch the Streamlit app:
+#    streamlit run app.py
+#
+# 4. (Optional) Update the environment after changes:
+#    conda env update -f environment.yml
+#
+# ============================================================
+# PROJECT STRUCTURE
+# ============================================================
+#
+# ├── app.py              # Main Streamlit application
+# ├── config.py           # YAML config loader
+# ├── config.yml          # Marker definitions, colors, thresholds
+# ├── data_loader.py      # Zarr dataset loading utilities
+# ├── processing.py       # Thresholding, cell typing, mask computation
+# ├── visualization.py    # Plotting functions (raw, thresholded, predicted)
+# ├── artifacts.py        # Artefact/tissue-exclusion masking
+# ├── environment.yml     # This file — Conda environment specification
+# └── thresholds/         # Output directory for saved threshold files
