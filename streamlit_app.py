@@ -11,8 +11,10 @@ Usage:
 import os
 import sys
 import io
+import base64
 import warnings
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -26,6 +28,7 @@ import matplotlib.colors as mcolors
 
 import xarray as xr
 import spatialproteomics as sp
+from streamlit_image_zoom import image_zoom
 
 warnings.filterwarnings("ignore")
 
@@ -175,13 +178,25 @@ OVERVIEW_CHANNELS = ["PAX5", "CD3", "CD11c", "CD11b", "CD68"]
 OVERVIEW_CELLTYPES = ["BCell", "TCell", "Dendritic", "Myeloid", "Macro"]
 
 
+def crop_ds(ds, y_start, y_end, x_start, x_end):
+    """Crop dataset to the given region."""
+    return ds.isel(y=slice(y_start, y_end), x=slice(x_start, x_end))
+
+
+def fig_to_rgb(fig):
+    """Convert a matplotlib figure to an RGB numpy array."""
+    fig.canvas.draw()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    from PIL import Image
+    img = Image.open(buf)
+    return np.array(img)
+
+
 def plot_overview(ds):
     """
-    Create the 4-panel overview figure:
-    - DAPI Segmentation (DAPI + segmentation overlay)
-    - Raw composite (5 major channels: PAX5, CD3, CD11c, CD11b, CD68)
-    - Thresholded composite (same 5 channels)
-    - Predicted cell types (5 major types: BCell, TCell, Dendritic, Myeloid, Macro)
+    Create the 4-panel overview figure as a static matplotlib figure.
     """
     ncols = 4
     scaling = 5
@@ -191,26 +206,27 @@ def plot_overview(ds):
     for axis in ax:
         axis.set_facecolor("black")
 
+    overview_colors = [all_marker_colors[ch] for ch in OVERVIEW_CHANNELS]
+
     # Panel 1: DAPI Segmentation
     ds.pp["DAPI"].pl.colorize("gold").pl.show(
         render_segmentation=True, ax=ax[0]
     )
     ax[0].set_title("DAPI Segmentation", fontsize=14, fontweight="bold", color="white")
 
-    # Panel 2: Raw composite (5 major channels)
-    overview_colors = [all_marker_colors[ch] for ch in OVERVIEW_CHANNELS]
+    # Panel 2: Raw composite
     ds.pp[OVERVIEW_CHANNELS].pl.colorize(
         overview_colors, layer_key="_raw_image"
     ).pl.show(ax=ax[1])
     ax[1].set_title("RAW", fontsize=14, fontweight="bold", color="white")
 
-    # Panel 3: Thresholded composite (same 5 channels)
+    # Panel 3: Thresholded composite
     ds.pp[OVERVIEW_CHANNELS].pl.colorize(
         overview_colors, layer_key="_thresholded_image"
     ).pl.show(ax=ax[2])
     ax[2].set_title("Threshold", fontsize=14, fontweight="bold", color="white")
 
-    # Panel 4: Predicted cell types (filtered to 5 major types)
+    # Panel 4: Predicted cell types
     try:
         ds.la[OVERVIEW_CELLTYPES].pl.show(
             render_image=False, render_labels=True, ax=ax[3]
@@ -228,11 +244,7 @@ def plot_overview(ds):
 
 def plot_marker_detail(ds, marker, color, celltype, threshold_value):
     """
-    Create a 4-panel detail view for a single marker:
-    - Marker raw + segmentation overlay
-    - Marker raw
-    - Marker thresholded
-    - Associated cell type labels
+    Create a 4-panel marker detail figure as a static matplotlib figure.
     """
     ncols = 4
     scaling = 4
@@ -357,16 +369,22 @@ def main():
 
     thresholds = {}
     for marker in MARKERS:
-        default_val = initial_thresholds.get(marker, 0)
-        # Clamp to 0-255
-        default_val = max(0, min(255, default_val))
+        slider_key = f"sidebar_thresh_{marker}"
+        if slider_key not in st.session_state:
+            default_val = initial_thresholds.get(marker, 0)
+            default_val = max(0, min(255, default_val))
+            st.session_state[slider_key] = default_val
+
         thresholds[marker] = st.sidebar.slider(
             f"{marker} → {ct_marker_dict[marker]}",
             min_value=0,
             max_value=255,
-            value=default_val,
+            key=slider_key,
             help=f"Threshold for {marker} (cell type: {ct_marker_dict[marker]})",
         )
+
+    # No sidebar zoom controls — each marker has its own interactive zoom expander
+    y_start, y_end, x_start, x_end = 0, ds.dims["y"], 0, ds.dims["x"]
 
     # ---- Action buttons ----
     col1, col2 = st.sidebar.columns(2)
@@ -389,6 +407,85 @@ def main():
         csv_path = f"{threshold_csv_dir}/{sample_id}.csv"
         df_save.to_csv(csv_path)
         st.sidebar.success(f"✅ Thresholds saved to `{csv_path}`")
+
+        # ---- Save log file for this sample ----
+        os.makedirs("logs", exist_ok=True)
+        log_path = f"logs/{sample_id}.csv"
+
+        # Compute global statistics shared across all markers
+        n_cells_total = int(ds.dims["cells"])
+        img_dims_y = int(ds.dims["y"])
+        img_dims_x = int(ds.dims["x"])
+
+        log_rows = []
+        for marker in MARKERS:
+            quantile_fraction = marker_threshold_dict.get(marker, None)
+            marker_img = ds.pp[marker]["_raw_image"].values.astype(np.float64)
+            flat = marker_img.ravel()
+
+            # Basic statistics
+            mean_raw = float(np.mean(flat))
+            std_raw = float(np.std(flat))
+            min_raw = float(np.min(flat))
+            max_raw = float(np.max(flat))
+            median_raw = float(np.median(flat))
+            pct_25 = float(np.percentile(flat, 25))
+            pct_75 = float(np.percentile(flat, 75))
+            pct_90 = float(np.percentile(flat, 90))
+            pct_95 = float(np.percentile(flat, 95))
+            pct_99 = float(np.percentile(flat, 99))
+
+            # Intensity at the config-specified quantile
+            intensity_at_quantile = int(np.percentile(flat, 100 * quantile_fraction)) if quantile_fraction is not None else None
+            pct_config = f"{100 * quantile_fraction:.0f}%" if quantile_fraction is not None else "N/A"
+
+            # Nonzero statistics
+            nonzero_mask = flat > 0
+            n_nonzero = int(np.sum(nonzero_mask))
+            frac_nonzero = float(n_nonzero / len(flat))
+            mean_nonzero = float(np.mean(flat[nonzero_mask])) if n_nonzero > 0 else 0.0
+            pct_above_threshold = float(np.mean(flat > thresholds[marker]))
+
+            # Initial threshold (config-based, before user tuning)
+            initial_thresh = initial_thresholds.get(marker, None)
+            threshold_delta = thresholds[marker] - initial_thresh if initial_thresh is not None else None
+
+            celltype = ct_marker_dict[marker]
+            log_rows.append({
+                "sample_id": sample_id,
+                "channel": marker,
+                "celltype": celltype,
+                "n_cells_total": n_cells_total,
+                "img_dims_y": img_dims_y,
+                "img_dims_x": img_dims_x,
+                "pixels_total": int(img_dims_y * img_dims_x),
+                "mean_intensity_raw": round(mean_raw, 2),
+                "std_intensity_raw": round(std_raw, 2),
+                "min_intensity_raw": round(min_raw, 2),
+                "max_intensity_raw": round(max_raw, 2),
+                "median_intensity_raw": round(median_raw, 2),
+                "pct_25_raw": round(pct_25, 2),
+                "pct_75_raw": round(pct_75, 2),
+                "pct_90_raw": round(pct_90, 2),
+                "pct_95_raw": round(pct_95, 2),
+                "pct_99_raw": round(pct_99, 2),
+                "n_nonzero_pixels": n_nonzero,
+                "fraction_nonzero": round(frac_nonzero, 6),
+                "mean_nonzero_raw": round(mean_nonzero, 2),
+                "config_quantile_fraction": quantile_fraction,
+                "config_quantile_percentile": pct_config,
+                "intensity_at_config_percentile": intensity_at_quantile,
+                "initial_threshold": initial_thresh,
+                "current_threshold": thresholds[marker],
+                "threshold_delta": threshold_delta,
+                "pct_pixels_above_threshold": round(pct_above_threshold, 6),
+                "timestamp": datetime.now().isoformat(),
+            })
+
+        df_log = pd.DataFrame(log_rows)
+        df_log.to_csv(log_path, index=False)
+        st.sidebar.success(f"📋 Log saved to `{log_path}`")
+
         # Clear the cache so next load picks up new file
         st.cache_data.clear()
 
@@ -397,41 +494,243 @@ def main():
         with st.spinner("Running cell type prediction pipeline..."):
             try:
                 ds_processed = run_pipeline(ds, thresholds)
-
-                # ---- Overview section ----
-                st.subheader("📊 Overview")
-                st.markdown(
-                    "Four-panel view showing segmentation, raw composite, "
-                    "thresholded composite, and predicted cell types."
-                )
-                fig_overview = plot_overview(ds_processed)
-                st.pyplot(fig_overview)
-                plt.close(fig_overview)
-
-                # ---- Per-marker detail section ----
-                st.subheader("🔬 Per-Marker Detail")
-                st.markdown(
-                    "For each marker, view the raw signal, thresholded signal, "
-                    "and the corresponding predicted cell type."
-                )
-
-                for marker in MARKERS:
-                    try:
-                        color = all_marker_colors[marker]
-                        celltype = ct_marker_dict[marker]
-                        threshold_value = thresholds[marker]
-                        fig_detail = plot_marker_detail(
-                            ds_processed, marker, color, celltype, threshold_value
-                        )
-                        st.pyplot(fig_detail)
-                        plt.close(fig_detail)
-                    except Exception as e:
-                        st.error(f"Error plotting {marker}: {e}")
-
-
+                # Store in session state for real-time zoom
+                st.session_state.ds_processed = ds_processed
+                st.session_state.pipeline_has_run = True
+                st.rerun()
             except Exception as e:
                 st.error(f"❌ Error running pipeline: {e}")
                 st.exception(e)
+
+    # ---- Display results (from session state, supports real-time zoom) ----
+    if st.session_state.get("pipeline_has_run") and st.session_state.get("ds_processed") is not None:
+        ds_processed = st.session_state.ds_processed
+
+        # Crop the dataset for zoom
+        ds_cropped = crop_ds(ds_processed, y_start, y_end, x_start, x_end)
+
+        # ---- Overview section ----
+        st.subheader("📊 Overview")
+        st.markdown(
+            "Four-panel view showing segmentation, raw composite, "
+            "thresholded composite, and predicted cell types."
+        )
+        fig_overview = plot_overview(ds_cropped)
+        st.pyplot(fig_overview)
+        plt.close(fig_overview)
+
+        # ---- Per-marker detail section ----
+        st.subheader("🔬 Per-Marker Detail")
+        st.markdown(
+            "For each marker, view the raw signal, thresholded signal, "
+            "and the corresponding predicted cell type."
+        )
+
+        for marker in MARKERS:
+            try:
+                color = all_marker_colors[marker]
+                celltype = ct_marker_dict[marker]
+                threshold_value = thresholds[marker]
+                fig_detail = plot_marker_detail(
+                    ds_cropped, marker, color, celltype, threshold_value
+                )
+                st.pyplot(fig_detail)
+                plt.close(fig_detail)
+
+                # Interactive zoom expander for each marker
+                with st.expander(f"🔍 Interactive Zoom: {marker} → {celltype}"):
+                    st.markdown(
+                        f"**{marker}** — adjust threshold and explore with synchronized interactive zoom. "
+                        "🖱️ Click/drag on any image to zoom/pan — all three images move together."
+                    )
+
+                    # Local threshold slider for this marker
+                    local_thresh = st.slider(
+                        f"Threshold for {marker}",
+                        min_value=0, max_value=255,
+                        value=threshold_value,
+                        key=f"zoom_thresh_{marker}",
+                    )
+
+                    # Re-run pipeline with updated threshold for this marker
+                    local_thresholds = thresholds.copy()
+                    local_thresholds[marker] = local_thresh
+                    with st.spinner(f"Re-running pipeline for {marker}..."):
+                        try:
+                            ds_local = run_pipeline(ds, local_thresholds)
+                            ds_local_cropped = crop_ds(ds_local, y_start, y_end, x_start, x_end)
+
+                            # Render each panel as a separate image (no titles)
+                            def render_single_panel(ds_data, channel, panel_color, layer_key, render_segmentation=False, render_labels=False, ct=None):
+                                fig, ax = plt.subplots(1, 1, figsize=(4, 4), facecolor="black")
+                                ax.set_facecolor("black")
+                                ax.axis("off")
+                                try:
+                                    if render_labels and ct:
+                                        ds_data.la[ct].pl.show(render_image=False, render_labels=True, ax=ax, legend_label=False)
+                                    elif render_segmentation:
+                                        ds_data.pp[channel].pl.colorize(panel_color, layer_key=layer_key).la[ct].pl.show(
+                                            render_segmentation=True, ax=ax, legend_image=False, legend_segmentation=False, legend_label=False
+                                        )
+                                    else:
+                                        ds_data.pp[channel].pl.colorize(panel_color, layer_key=layer_key).pl.show(ax=ax, legend_image=False)
+                                except (ValueError, KeyError, AttributeError):
+                                    ax.imshow(np.zeros((100, 100)), cmap="gray", vmin=0, vmax=1)
+                                plt.tight_layout(pad=0)
+                                rgb = fig_to_rgb(fig)
+                                plt.close(fig)
+                                return rgb
+
+                            img_raw = render_single_panel(ds_local_cropped, marker, color, "_raw_image")
+                            img_thresh = render_single_panel(ds_local_cropped, marker, color, "_thresholded_image")
+                            img_pred = render_single_panel(ds_local_cropped, marker, color, "_thresholded_image",
+                                                           render_labels=True, ct=celltype)
+
+                            # Convert all images to base64
+                            def img_to_b64(rgb):
+                                from PIL import Image
+                                pil_img = Image.fromarray(rgb)
+                                # Convert RGBA to RGB if needed (JPEG doesn't support alpha)
+                                if pil_img.mode == 'RGBA':
+                                    pil_img = pil_img.convert('RGB')
+                                buf = io.BytesIO()
+                                pil_img.save(buf, format="JPEG", subsampling=0, quality=95)
+                                return base64.b64encode(buf.getvalue()).decode()
+
+                            b64_raw = img_to_b64(img_raw)
+                            b64_thresh = img_to_b64(img_thresh)
+                            b64_pred = img_to_b64(img_pred)
+
+                            # Custom HTML with synchronized zoom across 3 images
+                            html = f"""
+                            <style>
+                            .zoom-grid-{marker} {{
+                                display: grid;
+                                grid-template-columns: 1fr 1fr 1fr;
+                                gap: 8px;
+                                max-width: 100%;
+                            }}
+                            .zoom-cell-{marker} {{
+                                position: relative;
+                                overflow: hidden;
+                                background: black;
+                                border: 1px solid #555;
+                            }}
+                            .zoom-cell-{marker} img {{
+                                width: 100%;
+                                height: auto;
+                                display: block;
+                                cursor: crosshair;
+                                transition: none;
+                            }}
+                            </style>
+                            <div class="zoom-grid-{marker}" id="sync-zoom-{marker}">
+                                <div class="zoom-cell-{marker}">
+                                    <img id="img-{marker}-0" src="data:image/jpeg;base64,{b64_raw}" data-scale="1" data-ox="0.5" data-oy="0.5">
+                                </div>
+                                <div class="zoom-cell-{marker}">
+                                    <img id="img-{marker}-1" src="data:image/jpeg;base64,{b64_thresh}" data-scale="1" data-ox="0.5" data-oy="0.5">
+                                </div>
+                                <div class="zoom-cell-{marker}">
+                                    <img id="img-{marker}-2" src="data:image/jpeg;base64,{b64_pred}" data-scale="1" data-ox="0.5" data-oy="0.5">
+                                </div>
+                            </div>
+                            <script>
+                            (function() {{
+                                const prefix = 'img-{marker}-';
+                                const images = [];
+                                for (let i = 0; i < 3; i++) {{
+                                    const img = document.getElementById(prefix + i);
+                                    if (img) images.push(img);
+                                }}
+                                if (images.length === 0) return;
+
+                                let isDragging = false;
+                                let startX, startY;
+                                let currentScale = 1;
+                                let originX = 0.5, originY = 0.5;
+
+                                function applyTransform(scale, ox, oy) {{
+                                    images.forEach(img => {{
+                                        img.style.transformOrigin = (ox * 100) + '% ' + (oy * 100) + '%';
+                                        img.style.transform = 'scale(' + scale + ')';
+                                        img.dataset.scale = scale;
+                                        img.dataset.ox = ox;
+                                        img.dataset.oy = oy;
+                                    }});
+                                }}
+
+                                function handleWheel(e) {{
+                                    e.preventDefault();
+                                    const rect = e.target.getBoundingClientRect();
+                                    const ox = (e.clientX - rect.left) / rect.width;
+                                    const oy = (e.clientY - rect.top) / rect.height;
+                                    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+                                    currentScale = Math.max(1, Math.min(4, currentScale + delta));
+                                    originX = ox;
+                                    originY = oy;
+                                    applyTransform(currentScale, originX, originY);
+                                }}
+
+                                function handleMouseDown(e) {{
+                                    if (currentScale > 1) {{
+                                        isDragging = true;
+                                        startX = e.clientX;
+                                        startY = e.clientY;
+                                        e.target.style.cursor = 'grabbing';
+                                    }}
+                                }}
+
+                                function handleMouseMove(e) {{
+                                    if (isDragging && currentScale > 1) {{
+                                        const dx = (e.clientX - startX) / e.target.width;
+                                        const dy = (e.clientY - startY) / e.target.height;
+                                        originX = Math.max(0, Math.min(1, originX - dx));
+                                        originY = Math.max(0, Math.min(1, originY - dy));
+                                        startX = e.clientX;
+                                        startY = e.clientY;
+                                        applyTransform(currentScale, originX, originY);
+                                    }}
+                                }}
+
+                                function handleMouseUp(e) {{
+                                    if (isDragging) {{
+                                        isDragging = false;
+                                        e.target.style.cursor = 'crosshair';
+                                    }} else if (currentScale === 1) {{
+                                        // Click to zoom in at click position
+                                        const rect = e.target.getBoundingClientRect();
+                                        originX = (e.clientX - rect.left) / rect.width;
+                                        originY = (e.clientY - rect.top) / rect.height;
+                                        currentScale = 2;
+                                        applyTransform(currentScale, originX, originY);
+                                    }}
+                                }}
+
+                                function handleDblClick(e) {{
+                                    currentScale = 1;
+                                    originX = 0.5;
+                                    originY = 0.5;
+                                    applyTransform(1, 0.5, 0.5);
+                                }}
+
+                                images.forEach(img => {{
+                                    img.addEventListener('wheel', handleWheel, {{passive: false}});
+                                    img.addEventListener('mousedown', handleMouseDown);
+                                    document.addEventListener('mousemove', handleMouseMove);
+                                    document.addEventListener('mouseup', handleMouseUp);
+                                    img.addEventListener('dblclick', handleDblClick);
+                                }});
+                            }})();
+                            </script>
+                            """
+                            st.components.v1.html(html, height=450)
+
+                        except Exception as e:
+                            st.error(f"Error in zoom view for {marker}: {e}")
+
+            except Exception as e:
+                st.error(f"Error plotting {marker}: {e}")
     else:
         st.info(
             "👈 Adjust the threshold sliders in the sidebar and click **Run Pipeline** "
