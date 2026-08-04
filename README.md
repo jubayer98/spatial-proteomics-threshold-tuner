@@ -5,7 +5,7 @@ Interactive tool for tuning per-marker intensity thresholds used in cell type pr
 ## Setup
 
 ```bash
-git clone https://github.com/jubayer98/spatial-proteomics-threshold-tuner.git
+git clone -b v1.1 https://github.com/jubayer98/spatial-proteomics-threshold-tuner.git
 cd spatial-proteomics-threshold-tuner
 conda env create -f environment.yml
 conda activate sp_threshold_tuner
