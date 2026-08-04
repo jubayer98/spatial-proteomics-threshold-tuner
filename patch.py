@@ -1,45 +1,56 @@
+#!/usr/bin/env python3
 """
 patch.py — Fix spatialproteomics read-only buffer error
 
 Applies a one-line fix to spatialproteomics/la/label.py so that
 relabel_sequential receives a writable copy of the labels array.
-Works on macOS, Linux, and Windows.
+Works natively on macOS, Linux, and Windows.
 
-Usage:  python patch.py
+Usage: python patch.py
 """
-import importlib.util
-import pathlib
+
 import sys
+from pathlib import Path
 
 
-def main():
-    spec = importlib.util.find_spec("spatialproteomics.la")
-    if spec is None or spec.origin is None:
-        print("ERROR: spatialproteomics is not installed in the current Python environment.")
+def patch_spatialproteomics():
+    # 1. Locate package directory safely
+    try:
+        import spatialproteomics.la
+    except ImportError:
+        sys.stderr.write(
+            "ERROR: spatialproteomics is not installed in the current Python environment.\n"
+        )
         sys.exit(1)
 
-    target = pathlib.Path(spec.origin)
-    if not target.exists():
-        print(f"ERROR: {target} not found.")
+    target = Path(spatialproteomics.la.__file__).parent / "label.py"
+
+    # 2. Guardrail check
+    if not target.is_file():
+        sys.stderr.write(f"ERROR: {target} not found.\n")
         sys.exit(1)
 
-    old = "_, fw, _ = relabel_sequential(self._obj.coords[Dims.LABELS].values)"
-    new = "_, fw, _ = relabel_sequential(self._obj.coords[Dims.LABELS].values.copy())"
+    # 3. Read content
+    content = target.read_text(encoding="utf-8")
 
-    content = target.read_text()
+    old_line = "_, fw, _ = relabel_sequential(self._obj.coords[Dims.LABELS].values)"
+    new_line = "_, fw, _ = relabel_sequential(self._obj.coords[Dims.LABELS].values.copy())"
 
-    if new in content:
+    # 4. Check status & apply patch
+    if new_line in content:
         print(f"Already patched: {target}")
-        return
+        sys.exit(0)
 
-    if old not in content:
-        print(f"ERROR: Expected line not found in {target}. The library may have changed.")
+    if old_line not in content:
+        sys.stderr.write(
+            f"ERROR: Expected line not found in {target}. The library may have changed.\n"
+        )
         sys.exit(1)
 
-    patched = content.replace(old, new)
-    target.write_text(patched)
+    patched_content = content.replace(old_line, new_line)
+    target.write_text(patched_content, encoding="utf-8")
     print(f"Patched: {target}")
 
 
 if __name__ == "__main__":
-    main()
+    patch_spatialproteomics()
