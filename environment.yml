@@ -9,7 +9,9 @@ dependencies:
   - pandas
   - matplotlib
   - xarray
+  - zarr
   - pyyaml
-  - streamlit>=1.30
+  - pillow
+  - streamlit>=1.32
   - pip:
       - spatialproteomics>=0.8.0
