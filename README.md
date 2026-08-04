@@ -10,7 +10,7 @@ cd spatial-proteomics-threshold-tuner
 conda update -n base -c conda-forge conda
 conda env create -f environment.yml
 conda activate sp_threshold_tuner
-bash patch.sh
+python patch.py
 ```
 
 ## Run
